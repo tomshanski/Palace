@@ -14,12 +14,13 @@ let gameState = {
     deck: [],
     pile: [],
     turn: 0,
-    hands: {}, // playerID: { hand, faceUp, faceDown }
+    hands: {}, 
+    lastPlayerId: null
 };
 
 function createDeck() {
     const suits = ['♠', '♣', '♥', '♦'];
-    const values = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]; // 11=J, 14=A
+    const values = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
     let deck = [];
     for (let s of suits) {
         for (let v of values) {
@@ -33,7 +34,7 @@ function startGame() {
     gameState.deck = createDeck();
     players.forEach((id) => {
         gameState.hands[id] = {
-            hand: gameState.deck.splice(0, 5),
+            hand: gameState.deck.splice(0, 3),
             faceUp: gameState.deck.splice(0, 3),
             faceDown: gameState.deck.splice(0, 3)
         };
@@ -43,47 +44,78 @@ function startGame() {
     io.emit('gameState', gameState);
 }
 
+function checkFourOfAKind(pile) {
+    if (pile.length < 4) return false;
+    const lastFour = pile.slice(-4);
+    return lastFour.every(c => c.value === lastFour[0].value);
+}
+
 io.on('connection', (socket) => {
-    if (players.length < 2) {
-        players.push(socket.id);
-        console.log(`Player joined: ${socket.id}`);
-    }
+    if (players.length < 2) players.push(socket.id);
+    if (players.length === 2) startGame();
 
-    if (players.length === 2) {
-        startGame();
-    }
-
-    socket.on('playCard', (cardIndex) => {
+    socket.on('playCard', ({ cardIndex, type }) => {
         const playerIdx = players.indexOf(socket.id);
         if (playerIdx !== gameState.turn) return;
 
-        const playerHand = gameState.hands[socket.id].hand;
-        const card = playerHand[cardIndex];
+        const pHand = gameState.hands[socket.id];
+        let card;
+        
+        // Ensure player plays in order: Hand -> FaceUp -> FaceDown
+        if (type === 'hand') card = pHand.hand[cardIndex];
+        else if (type === 'faceUp' && pHand.hand.length === 0) card = pHand.faceUp[cardIndex];
+        else if (type === 'faceDown' && pHand.hand.length === 0 && pHand.faceUp.length === 0) card = pHand.faceDown[cardIndex];
+        else return; // Invalid move type
+
         const topCard = gameState.pile[gameState.pile.length - 1];
+        let canPlay = false;
 
-        // Basic Palace Logic: 2 resets, 10 burns, others must be higher
-        if (!topCard || card.value >= topCard.value || card.value === 2 || card.value === 10) {
-            gameState.pile.push(playerHand.splice(cardIndex, 1)[0]);
-            
-            // Draw back up to 5 if deck isn't empty
-            if (playerHand.length < 5 && gameState.deck.length > 0) {
-                playerHand.push(gameState.deck.pop());
-            }
+        // PALACE LOGIC
+        if (!topCard || topCard.value === 2) {
+            canPlay = true;
+        } else if (topCard.value === 7) {
+            if (card.value <= 7 || card.value === 2 || card.value === 10) canPlay = true;
+        } else {
+            if (card.value >= topCard.value || card.value === 2 || card.value === 10) canPlay = true;
+        }
 
-            // Special card: 10 clears the pile
-            if (card.value === 10) {
+        if (canPlay) {
+            // Remove card from player source
+            pHand[type].splice(cardIndex, 1);
+            gameState.pile.push(card);
+
+            // Logic for 10 or 4-of-a-kind (Burn)
+            if (card.value === 10 || checkFourOfAKind(gameState.pile)) {
                 gameState.pile = [];
+                // Player goes again on a burn
             } else {
                 gameState.turn = (gameState.turn + 1) % 2;
             }
+
+            // Draw up to 3 cards
+            while (pHand.hand.length < 3 && gameState.deck.length > 0) {
+                pHand.hand.push(gameState.deck.pop());
+            }
+        } else if (type === 'faceDown') {
+            // If blind face-down play fails, you must pick up the pile + the failed card
+            pHand.hand.push(...gameState.pile, card);
+            pHand.faceDown.splice(cardIndex, 1);
+            gameState.pile = [];
+            gameState.turn = (gameState.turn + 1) % 2;
         }
+
         io.emit('gameState', gameState);
     });
 
-    socket.on('disconnect', () => {
-        players = players.filter(id => id !== socket.id);
+    socket.on('pickUp', () => {
+        const playerIdx = players.indexOf(socket.id);
+        if (playerIdx !== gameState.turn) return;
+
+        gameState.hands[socket.id].hand.push(...gameState.pile);
+        gameState.pile = [];
+        gameState.turn = (gameState.turn + 1) % 2;
+        io.emit('gameState', gameState);
     });
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(3000);
