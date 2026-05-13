@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Palace Online</title>
+    <style>
+        body { font-family: sans-serif; background: #2c3e50; color: white; text-align: center; }
+        .card { display: inline-block; padding: 10px; border: 1px solid #fff; margin: 5px; cursor: pointer; background: white; color: black; border-radius: 5px; }
+        #pile { font-size: 24px; margin: 20px; padding: 20px; border: 2px dashed #bdc3c7; }
+        .disabled { opacity: 0.5; pointer-events: none; }
+    </style>
+</head>
+<body>
+    <h1>Palace</h1>
+    <div id="status">Waiting for players...</div>
+    <div id="pile">Pile: Empty</div>
+    <h3>Your Hand</h3>
+    <div id="hand"></div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const handDiv = document.getElementById('hand');
+        const pileDiv = document.getElementById('pile');
+        const statusDiv = document.getElementById('status');
+
+        socket.on('gameState', (gs) => {
+            const myId = socket.id;
+            const myTurn = gs.players[gs.turn] === myId;
+            statusDiv.innerText = myTurn ? "Your Turn!" : "Opponent's Turn";
+
+            // Render Pile
+            const top = gs.pile[gs.pile.length - 1];
+            pileDiv.innerText = top ? `Pile: ${top.value}${top.suit}` : "Pile: Empty";
+
+            // Render Hand
+            handDiv.innerHTML = '';
+            gs.hands[myId].hand.forEach((card, index) => {
+                const btn = document.createElement('div');
+                btn.className = 'card';
+                btn.innerText = `${card.value}${card.suit}`;
+                btn.onclick = () => socket.emit('playCard', index);
+                handDiv.appendChild(btn);
+            });
+        });
+    </script>
+</body>
+</html>
